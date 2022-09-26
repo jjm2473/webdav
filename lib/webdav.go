@@ -32,6 +32,7 @@ type Config struct {
 	Cors      CorsCfg
 	Users     map[string]*User
 	LogFormat string
+	Anonymous    bool
 	GetBlackList []string
 }
 
@@ -81,26 +82,31 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Gets the correct user for this request.
 		username, password, ok := r.BasicAuth()
-		zap.L().Info("login attempt", zap.String("username", username), zap.String("remote_address", r.RemoteAddr))
+		zap.L().Info("req", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Bool("auth", ok), zap.String("username", username))
 		if !ok {
 			http.Error(w, "Not authorized", 401)
 			return
 		}
+		// zap.L().Info("login attempt", zap.String("username", username), zap.String("remote_address", r.RemoteAddr))
+		if username != "" && username != "anonymous" {
+			user, ok := c.Users[username]
+			if !ok {
+				http.Error(w, "Not authorized", 401)
+				return
+			}
 
-		user, ok := c.Users[username]
-		if !ok {
+			if !checkPassword(user.Password, password) {
+				zap.L().Info("invalid password", zap.String("username", username), zap.String("remote_address", r.RemoteAddr))
+				http.Error(w, "Not authorized", 401)
+				return
+			}
+
+			u = user
+			// zap.L().Info("user authorized", zap.String("username", username))
+		} else if !c.Anonymous {
 			http.Error(w, "Not authorized", 401)
 			return
 		}
-
-		if !checkPassword(user.Password, password) {
-			zap.L().Info("invalid password", zap.String("username", username), zap.String("remote_address", r.RemoteAddr))
-			http.Error(w, "Not authorized", 401)
-			return
-		}
-
-		u = user
-		zap.L().Info("user authorized", zap.String("username", username))
 	} else {
 		// Even if Auth is disabled, we might want to get
 		// the user from the Basic Auth header. Useful for Caddy
@@ -115,10 +121,21 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Checks for user permissions relatively to this PATH.
 	noModification := r.Method == "GET" || r.Method == "HEAD" ||
-		r.Method == "OPTIONS" || r.Method == "PROPFIND"
+		r.Method == "OPTIONS" || r.Method == "PROPFIND" || r.Method == "COPY"
 
 	allowed := u.Allowed(r.URL.Path, noModification)
 
+	if allowed && r.Method == "COPY" || r.Method == "MOVE" {
+		dest := r.Header.Get("Destination")
+		if dest == "" {
+			allowed = false
+		} else if r.URL.Path == dest || strings.HasPrefix(dest, r.URL.Path+"/") {
+			zap.L().Info("deny copy/move", zap.String("method", r.Method), zap.String("src", r.URL.Path), zap.String("dest", dest))
+			allowed = false
+		} else {
+			allowed = u.Allowed(dest, false)
+		}
+	}
 	zap.L().Debug("allowed & method & path", zap.Bool("allowed", allowed), zap.String("method", r.Method), zap.String("path", r.URL.Path))
 
 	if !allowed {

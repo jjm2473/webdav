@@ -26,12 +26,20 @@ type User struct {
 	Handler  *webdav.Handler
 }
 
+func dirContains(dir string, path string) bool {
+	if strings.HasSuffix(dir, "/") {
+		return strings.HasPrefix(path, dir)
+	} else {
+		return dir == path || strings.HasPrefix(path, dir+"/")
+	}
+}
+
 // Allowed checks if the user has permission to access a directory/file
 func (u User) Allowed(url string, noModification bool) bool {
 	var rule *Rule
-	i := len(u.Rules) - 1
+	i := 0
 
-	for i >= 0 {
+	for i < len(u.Rules) {
 		rule = u.Rules[i]
 
 		isAllowed := rule.Allow && (noModification || rule.Modify)
@@ -39,11 +47,11 @@ func (u User) Allowed(url string, noModification bool) bool {
 			if rule.Regexp.MatchString(url) {
 				return isAllowed
 			}
-		} else if strings.HasPrefix(url, rule.Path) {
+		} else if dirContains(rule.Path, url) {
 			return isAllowed
 		}
 
-		i--
+		i++
 	}
 
 	return noModification || u.Modify

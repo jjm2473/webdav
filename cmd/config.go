@@ -22,7 +22,7 @@ func parseRules(raw []interface{}, defaultModify bool) []*lib.Rule {
 		if r, ok := v.(map[interface{}]interface{}); ok {
 			rule := &lib.Rule{
 				Regex:  false,
-				Allow:  false,
+				Allow:  defaultModify,
 				Modify: defaultModify,
 				Path:   "",
 			}
@@ -119,7 +119,7 @@ func parseUsers(raw []interface{}, c *lib.Config) {
 			}
 
 			if rules, ok := u["rules"].([]interface{}); ok {
-				user.Rules = append(c.User.Rules, parseRules(rules, user.Modify)...)
+				user.Rules = append(parseRules(rules, user.Modify), c.User.Rules...)
 			}
 
 			user.Handler = &webdav.Handler{
@@ -194,6 +194,7 @@ func readConfig(flags *pflag.FlagSet) *lib.Config {
 		Debug:   getOptB(flags, "debug"),
 		Auth:    getOptB(flags, "auth"),
 		NoSniff: getOptB(flags, "nosniff"),
+		Anonymous: getOptB(flags, "anonymous"),
 		Cors: lib.CorsCfg{
 			Enabled:     false,
 			Credentials: false,
