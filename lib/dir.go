@@ -5,6 +5,7 @@ import (
 	"mime"
 	"os"
 	"path"
+	"path/filepath"
 
 	"golang.org/x/net/webdav"
 )
@@ -30,14 +31,19 @@ type WebDavDir struct {
 }
 
 func (d WebDavDir) Stat(ctx context.Context, name string) (os.FileInfo, error) {
-	// Skip wrapping if NoSniff is off
-	if !d.NoSniff {
-		return d.Dir.Stat(ctx, name)
-	}
-
 	info, err := d.Dir.Stat(ctx, name)
+
+	// Skip broken symbol link
+	if err != nil && os.IsNotExist(err) {
+		err = filepath.SkipDir
+	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Skip wrapping if NoSniff is off
+	if !d.NoSniff {
+		return info, err
 	}
 
 	return NoSniffFileInfo{info}, nil
