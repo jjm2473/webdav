@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -199,6 +200,7 @@ func readConfig(flags *pflag.FlagSet) *lib.Config {
 		},
 		Users:     map[string]*lib.User{},
 		LogFormat: getOpt(flags, "log_format"),
+		GetBlackList: []string{".DS_Store", "Thumbs.db", ".apdisk"},
 	}
 
 	rawRules := v.Get("rules")
@@ -219,6 +221,7 @@ func readConfig(flags *pflag.FlagSet) *lib.Config {
 	if len(cfg.Users) != 0 && !cfg.Auth {
 		log.Print("Users will be ignored due to auth=false")
 	}
+	sort.Strings(cfg.GetBlackList)
 
 	return cfg
 }

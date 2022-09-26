@@ -2,10 +2,15 @@ package lib
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
 
 	"go.uber.org/zap"
+	"golang.org/x/net/webdav"
 )
 
 // CorsCfg is the CORS config.
@@ -27,6 +32,7 @@ type Config struct {
 	Cors      CorsCfg
 	Users     map[string]*User
 	LogFormat string
+	GetBlackList []string
 }
 
 // ServeHTTP determines if the request is for this plugin, and if all prerequisites are met.
@@ -124,22 +130,14 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w = newResponseWriterNoBody(w)
 	}
 
-	// Excerpt from RFC4918, section 9.4:
+	// RFC4918, section 9.4:
 	//
 	// 		GET, when applied to a collection, may return the contents of an
 	//		"index.html" resource, a human-readable view of the contents of
 	//		the collection, or something else altogether.
 	//
-	// Get, when applied to collection, will return the same as PROPFIND method.
-	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, u.Handler.Prefix) {
-		info, err := u.Handler.FileSystem.Stat(context.TODO(), strings.TrimPrefix(r.URL.Path, u.Handler.Prefix))
-		if err == nil && info.IsDir() {
-			r.Method = "PROPFIND"
-
-			if r.Header.Get("Depth") == "" {
-				r.Header.Add("Depth", "1")
-			}
-		}
+	if r.Method == "GET" && handleDirList(u.Handler.FileSystem, c.GetBlackList, w, r) {
+		return
 	}
 
 	// Runs the WebDAV.
@@ -171,4 +169,53 @@ func (w responseWriterNoBody) Write(data []byte) (int, error) {
 // WriteHeader writes the header to the http.ResponseWriter.
 func (w responseWriterNoBody) WriteHeader(statusCode int) {
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func contains(s []string, searchterm string) bool {
+	i := sort.SearchStrings(s, searchterm)
+	return i < len(s) && s[i] == searchterm
+}
+
+func handleDirList(fs webdav.FileSystem, blacklist []string, w http.ResponseWriter, req *http.Request) bool {
+	ctx := context.Background()
+	f, err := fs.OpenFile(ctx, req.URL.Path, os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if fi, _ := f.Stat(); fi == nil || !fi.IsDir() {
+		return false
+	}
+	if !strings.HasSuffix(req.URL.Path, "/") {
+		http.Redirect(w, req, req.URL.Path+"/", 302)
+		return true
+	}
+	dirs, err := f.Readdir(-1)
+	if err != nil {
+		log.Print(w, "Error reading directory", http.StatusInternalServerError)
+		return false
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<pre>\n")
+	if req.URL.Path != "/" {
+		fmt.Fprintf(w, "<a href=\"../\">..</a>/\n")
+	}
+	for _, d := range dirs {
+		name := d.Name()
+		if strings.HasPrefix(name, "._") || contains(blacklist, name) {
+			continue
+		}
+		suffix := ""
+		link := name
+		if d.IsDir() {
+			link += "/"
+			suffix = "/"
+		}
+		if (d.Mode() & os.ModeSymlink) == os.ModeSymlink {
+			suffix = "@"
+		}
+		fmt.Fprintf(w, "<a href=\"%s\">%s</a>%s\n", link, name, suffix)
+	}
+	fmt.Fprintf(w, "</pre>\n")
+	return true
 }
