@@ -2,7 +2,6 @@ package lib
 
 import (
 	"regexp"
-	"strings"
 
 	"golang.org/x/net/webdav"
 )
@@ -24,14 +23,6 @@ type User struct {
 	Modify   bool
 	Rules    []*Rule
 	Handler  *webdav.Handler
-}
-
-func dirContains(dir string, path string) bool {
-	if strings.HasSuffix(dir, "/") {
-		return strings.HasPrefix(path, dir)
-	} else {
-		return dir == path || strings.HasPrefix(path, dir+"/")
-	}
 }
 
 // Allowed checks if the user has permission to access a directory/file

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -34,6 +35,16 @@ type Config struct {
 	LogFormat string
 	Anonymous    bool
 	GetBlackList []string
+}
+
+func stripPrefix(path string, prefix string) (string, bool) {
+	if prefix == "" {
+		return path, true
+	}
+	if r := strings.TrimPrefix(path, prefix); len(r) < len(path) {
+		return r, true
+	}
+	return path, false
 }
 
 // ServeHTTP determines if the request is for this plugin, and if all prerequisites are met.
@@ -123,13 +134,34 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	noModification := r.Method == "GET" || r.Method == "HEAD" ||
 		r.Method == "OPTIONS" || r.Method == "PROPFIND" || r.Method == "COPY"
 
-	allowed := u.Allowed(r.URL.Path, noModification)
+	path, ok := stripPrefix(r.URL.Path, u.Handler.Prefix)
+	if !ok {
+		http.Redirect(w, r, u.Handler.Prefix, 302)
+		return
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	allowed := u.Allowed(path, noModification)
 
 	if allowed && r.Method == "COPY" || r.Method == "MOVE" {
 		dest := r.Header.Get("Destination")
+		if dest != "" {
+			du, err := url.Parse(dest)
+			if err != nil {
+				dest = ""
+			} else {
+				dest, ok = stripPrefix(du.Path, u.Handler.Prefix)
+				if !ok {
+					dest = ""
+				} else if !strings.HasPrefix(dest, "/") {
+					dest = "/" + dest
+				}
+			}
+		}
 		if dest == "" {
 			allowed = false
-		} else if r.URL.Path == dest || strings.HasPrefix(dest, r.URL.Path+"/") {
+		} else if path == dest || dirContains(path, dest) {
 			zap.L().Info("deny copy/move", zap.String("method", r.Method), zap.String("src", r.URL.Path), zap.String("dest", dest))
 			allowed = false
 		} else {
@@ -153,8 +185,18 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//		"index.html" resource, a human-readable view of the contents of
 	//		the collection, or something else altogether.
 	//
-	if r.Method == "GET" && handleDirList(u.Handler.FileSystem, c.GetBlackList, w, r) {
+	if r.Method == "GET" && handleDirList(u.Handler.FileSystem, c.GetBlackList, w, r, path) {
 		return
+	}
+
+	if r.Method == "PROPFIND" && (path == "" || path == "/") {
+		depth := r.Header.Get("Depth")
+		if depth == "" || depth == "infinity" {
+			w.Header().Set("Content-Type", "application/xml;charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<D:error><DAV:propfind-finite-depth/></D:error>"))
+			return
+		}
 	}
 
 	// Runs the WebDAV.
@@ -193,9 +235,9 @@ func contains(s []string, searchterm string) bool {
 	return i < len(s) && s[i] == searchterm
 }
 
-func handleDirList(fs webdav.FileSystem, blacklist []string, w http.ResponseWriter, req *http.Request) bool {
+func handleDirList(fs webdav.FileSystem, blacklist []string, w http.ResponseWriter, req *http.Request, path string) bool {
 	ctx := context.Background()
-	f, err := fs.OpenFile(ctx, req.URL.Path, os.O_RDONLY, 0)
+	f, err := fs.OpenFile(ctx, path, os.O_RDONLY, 0)
 	if err != nil {
 		return false
 	}
@@ -214,7 +256,7 @@ func handleDirList(fs webdav.FileSystem, blacklist []string, w http.ResponseWrit
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, "<pre>\n")
-	if req.URL.Path != "/" {
+	if path != "/" {
 		fmt.Fprintf(w, "<a href=\"../\">..</a>/\n")
 	}
 	for _, d := range dirs {
