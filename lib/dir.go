@@ -2,6 +2,7 @@ package lib
 
 import (
 	"context"
+	"io/fs"
 	"mime"
 	"os"
 	"path"
@@ -31,6 +32,12 @@ type WebDavDir struct {
 }
 
 func (d WebDavDir) Stat(ctx context.Context, name string) (os.FileInfo, error) {
+	u := ctx.Value(WebDAVCtxUserKey).(*User)
+	if u != nil {
+		if !u.Allowed("/"+name, true) {
+			return nil, filepath.SkipDir
+		}
+	}
 	info, err := d.Dir.Stat(ctx, name)
 
 	// Skip broken symbol link
@@ -50,6 +57,12 @@ func (d WebDavDir) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 }
 
 func (d WebDavDir) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
+	u := ctx.Value(WebDAVCtxUserKey).(*User)
+	if u != nil {
+		if !u.Allowed("/"+name, true) {
+			return nil, fs.ErrNotExist
+		}
+	}
 	// Skip wrapping if NoSniff is off
 	if !d.NoSniff {
 		return d.Dir.OpenFile(ctx, name, flag, perm)

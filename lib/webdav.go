@@ -14,6 +14,10 @@ import (
 	"golang.org/x/net/webdav"
 )
 
+const (
+	WebDAVCtxUserKey = "webdav_user"
+)
+
 // CorsCfg is the CORS config.
 type CorsCfg struct {
 	Enabled        bool
@@ -139,10 +143,7 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, u.Handler.Prefix, 302)
 		return
 	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	allowed := u.Allowed(path, noModification)
+	allowed := u.Allowed("/"+path, noModification)
 
 	if allowed && r.Method == "COPY" || r.Method == "MOVE" {
 		dest := r.Header.Get("Destination")
@@ -161,7 +162,7 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if dest == "" {
 			allowed = false
-		} else if path == dest || dirContains(path, dest) {
+		} else if ("/"+path) == dest || dirContains("/"+path, dest) {
 			zap.L().Info("deny copy/move", zap.String("method", r.Method), zap.String("src", r.URL.Path), zap.String("dest", dest))
 			allowed = false
 		} else {
@@ -179,6 +180,9 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w = newResponseWriterNoBody(w)
 	}
 
+	ctx := context.WithValue(r.Context(), WebDAVCtxUserKey, u)
+	r = r.WithContext(ctx)
+
 	// RFC4918, section 9.4:
 	//
 	// 		GET, when applied to a collection, may return the contents of an
@@ -189,7 +193,7 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == "PROPFIND" && (path == "" || path == "/") {
+	if r.Method == "PROPFIND" && path == "" {
 		depth := r.Header.Get("Depth")
 		if depth == "" || depth == "infinity" {
 			w.Header().Set("Content-Type", "application/xml;charset=utf-8")
@@ -236,8 +240,9 @@ func contains(s []string, searchterm string) bool {
 }
 
 func handleDirList(fs webdav.FileSystem, blacklist []string, w http.ResponseWriter, req *http.Request, path string) bool {
-	ctx := context.Background()
-	f, err := fs.OpenFile(ctx, path, os.O_RDONLY, 0)
+	ctx := req.Context()
+	u := ctx.Value(WebDAVCtxUserKey).(*User)
+	f, err := fs.OpenFile(req.Context(), path, os.O_RDONLY, 0)
 	if err != nil {
 		return false
 	}
@@ -256,13 +261,18 @@ func handleDirList(fs webdav.FileSystem, blacklist []string, w http.ResponseWrit
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, "<pre>\n")
-	if path != "/" {
+	if path != "" {
 		fmt.Fprintf(w, "<a href=\"../\">..</a>/\n")
 	}
 	for _, d := range dirs {
 		name := d.Name()
 		if strings.HasPrefix(name, "._") || contains(blacklist, name) {
 			continue
+		}
+		if u != nil {
+			if !u.Allowed("/"+path+name, true) {
+				continue
+			}
 		}
 		suffix := ""
 		link := name
