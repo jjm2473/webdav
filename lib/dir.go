@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/net/webdav"
 )
@@ -41,7 +42,7 @@ func (d WebDavDir) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 	info, err := d.Dir.Stat(ctx, name)
 
 	// Skip broken symbol link
-	if err != nil && os.IsNotExist(err) {
+	if err != nil && os.IsNotExist(err) && isSymlink(ctx, d.Dir, name) {
 		err = filepath.SkipDir
 	}
 	if err != nil {
@@ -99,4 +100,17 @@ func (f WebDavFile) Readdir(count int) (fis []os.FileInfo, err error) {
 		fis[i] = NoSniffFileInfo{fis[i]}
 	}
 	return fis, nil
+}
+
+func isSymlink(_ context.Context, dir webdav.Dir, name string) bool {
+	cleaned := path.Clean("/" + name)
+	rel := strings.TrimPrefix(cleaned, "/")
+	fullPath := filepath.Join(string(dir), filepath.FromSlash(rel))
+
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return false
+	}
+
+	return info.Mode()&os.ModeSymlink == os.ModeSymlink
 }
